@@ -375,11 +375,11 @@ func handleEachPart(resp *http.Response, input string) string {
 					isGreen = false
 					isCode = false
 
-				} else if strings.HasPrefix(word, "\\") ||
-					strings.HasPrefix(word, "$") && strings.HasSuffix(word, "$") ||
+				} else if strings.HasPrefix(word, "$") && strings.HasSuffix(word, "$") ||
 					strings.HasPrefix(word, "$$") && strings.HasSuffix(word, "$$") ||
 					strings.HasPrefix(word, "\\begin") && strings.HasSuffix(word, "\\end") ||
-					strings.HasPrefix(word, "\\(") && strings.HasSuffix(word, "\\)") {
+					strings.HasPrefix(word, "\\(") && strings.HasSuffix(word, "\\)") ||
+					strings.HasPrefix(word, "\\[") && strings.HasSuffix(word, "\\]") {
 					// Latex code
 					isLatex = true
 					isCode = false
