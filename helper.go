@@ -42,16 +42,16 @@ var (
 
 func getDataResponseTxt(input string, params structs.Params, extraOptions structs.ExtraOptions) string {
 	return makeRequestAndGetData(input, structs.Params{
-		ApiKey:      *apiKey,
-		ApiModel:    *apiModel,
-		Provider:    *provider,
-		Max_length:  *max_length,
-		Temperature: *temperature,
-		Top_p:       *top_p,
-		Preprompt:   *preprompt,
-		Url:         *url,
+		ApiKey:       *apiKey,
+		ApiModel:     *apiModel,
+		Provider:     *provider,
+		Max_length:   *max_length,
+		Temperature:  *temperature,
+		Top_p:        *top_p,
+		Preprompt:    *preprompt,
+		Url:          *url,
 		PrevMessages: params.PrevMessages,
-		ThreadID: params.ThreadID,
+		ThreadID:     params.ThreadID,
 	}, extraOptions)
 }
 
@@ -328,6 +328,7 @@ func handleEachPart(resp *http.Response, input string) string {
 	previousWasTick := false
 	isTick := false
 	isRealCode := false
+	isLatex := false
 
 	lineLength := 0
 	size, err := ts.GetSize()
@@ -374,6 +375,16 @@ func handleEachPart(resp *http.Response, input string) string {
 					isGreen = false
 					isCode = false
 
+				} else if strings.HasPrefix(word, "\\") ||
+					strings.HasPrefix(word, "$") && strings.HasSuffix(word, "$") ||
+					strings.HasPrefix(word, "$$") && strings.HasSuffix(word, "$$") ||
+					strings.HasPrefix(word, "\\begin") && strings.HasSuffix(word, "\\end") ||
+					strings.HasPrefix(word, "\\(") && strings.HasSuffix(word, "\\)") {
+					// Latex code
+					isLatex = true
+					isCode = false
+					isGreen = false
+					isTick = false
 				} else {
 					isTick = false
 					// If its a normal word
@@ -390,6 +401,8 @@ func handleEachPart(resp *http.Response, input string) string {
 					codeText.Print(word)
 				} else if isGreen {
 					boldBlue.Print(word)
+				} else if isLatex {
+					latexText(word)
 				} else if !isTick {
 					fmt.Print(word)
 				}
@@ -441,6 +454,8 @@ func handleEachPart(resp *http.Response, input string) string {
 					codeText.Print(word)
 				} else if isGreen {
 					boldBlue.Print(word)
+				} else if isLatex {
+					latexText(word)
 				} else if !isTick {
 					fmt.Print(word)
 				} else {
@@ -468,7 +483,10 @@ func handleEachPart(resp *http.Response, input string) string {
 	return fullText
 
 }
-
+func latexText(s string) {
+	// Use ANSI escape codes to print the LaTeX code in a fixed-width font
+	fmt.Printf("\033[1;37;40m%s\033[0m", s)
+}
 func printConnectionErrorMsg(err error) {
 	bold.Fprintln(os.Stderr, "\rSome error has occurred. Check your internet connection.")
 	fmt.Fprintln(os.Stderr, "\nError:", err)
