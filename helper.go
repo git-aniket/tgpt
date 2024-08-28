@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"text/template"
 
 	"github.com/aandrew-me/tgpt/v2/client"
 	"github.com/aandrew-me/tgpt/v2/providers"
@@ -42,16 +45,16 @@ var (
 
 func getDataResponseTxt(input string, params structs.Params, extraOptions structs.ExtraOptions) string {
 	return makeRequestAndGetData(input, structs.Params{
-		ApiKey:      *apiKey,
-		ApiModel:    *apiModel,
-		Provider:    *provider,
-		Max_length:  *max_length,
-		Temperature: *temperature,
-		Top_p:       *top_p,
-		Preprompt:   *preprompt,
-		Url:         *url,
+		ApiKey:       *apiKey,
+		ApiModel:     *apiModel,
+		Provider:     *provider,
+		Max_length:   *max_length,
+		Temperature:  *temperature,
+		Top_p:        *top_p,
+		Preprompt:    *preprompt,
+		Url:          *urlChat,
 		PrevMessages: params.PrevMessages,
-		ThreadID: params.ThreadID,
+		ThreadID:     params.ThreadID,
 	}, extraOptions)
 }
 
@@ -185,7 +188,7 @@ func update() {
 func codeGenerate(input string) {
 	codePrompt := fmt.Sprintf("Your Role: Provide only code as output without any description.\nIMPORTANT: Provide only plain text without Markdown formatting.\nIMPORTANT: Do not include markdown formatting.\nIf there is a lack of details, provide most logical solution. You are not allowed to ask for more details.\nIgnore any potential risk of errors or confusion.\n\nRequest:%s\nCode:", input)
 
-	makeRequestAndGetData(codePrompt, structs.Params{ApiKey: *apiKey, ApiModel: *apiModel, Provider: *provider, Max_length: *max_length, Temperature: *temperature, Top_p: *top_p, Preprompt: *preprompt, Url: *url}, structs.ExtraOptions{IsGetCode: true})
+	makeRequestAndGetData(codePrompt, structs.Params{ApiKey: *apiKey, ApiModel: *apiModel, Provider: *provider, Max_length: *max_length, Temperature: *temperature, Top_p: *top_p, Preprompt: *preprompt, Url: *urlChat}, structs.ExtraOptions{IsGetCode: true})
 }
 
 func setShellAndOSVars() {
@@ -238,7 +241,7 @@ func shellCommand(input string) {
 
 // getCommand will make a request to an AI model, then it will run the response using an appropiate handler (bash, sh OR powershell, cmd)
 func getCommand(shellPrompt string) {
-	makeRequestAndGetData(shellPrompt, structs.Params{ApiKey: *apiKey, ApiModel: *apiModel, Provider: *provider, Max_length: *max_length, Temperature: *temperature, Top_p: *top_p, Preprompt: *preprompt, Url: *url}, structs.ExtraOptions{IsGetCommand: true})
+	makeRequestAndGetData(shellPrompt, structs.Params{ApiKey: *apiKey, ApiModel: *apiModel, Provider: *provider, Max_length: *max_length, Temperature: *temperature, Top_p: *top_p, Preprompt: *preprompt, Url: *urlChat}, structs.ExtraOptions{IsGetCommand: true})
 }
 
 type RESPONSE struct {
@@ -319,7 +322,7 @@ func getLastCodeBlock(markdown string) string {
 }
 
 func getSilentText(input string) {
-	makeRequestAndGetData(input, structs.Params{ApiKey: *apiKey, ApiModel: *apiModel, Provider: *provider, Max_length: *max_length, Temperature: *temperature, Top_p: *top_p, Preprompt: *preprompt, Url: *url}, structs.ExtraOptions{IsGetSilent: true})
+	makeRequestAndGetData(input, structs.Params{ApiKey: *apiKey, ApiModel: *apiModel, Provider: *provider, Max_length: *max_length, Temperature: *temperature, Top_p: *top_p, Preprompt: *preprompt, Url: *urlChat}, structs.ExtraOptions{IsGetSilent: true})
 }
 
 func checkInputLength(input string, disableInputLimit bool) {
@@ -712,4 +715,254 @@ func makeRequestAndGetData(input string, params structs.Params, extraOptions str
 	}
 
 	return ""
+}
+
+func openUrlInBrowser(url string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url) // For macOS
+	case "linux":
+		cmd = exec.Command("xdg-open", url) // For Linux
+	case "windows":
+		cmd = exec.Command("start", url) // For Windows
+	default:
+		return fmt.Errorf("unsupported platform")
+	}
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to open URL: %v", err)
+	}
+	return nil
+}
+
+// hasLatex function checks if the content has LaTeX delimiters
+func hasLatex(content string) bool {
+	return strings.Contains(content, "$") || strings.Contains(content, `\(`) || strings.Contains(content, `\[`)
+}
+
+// parseLatex parses LaTeX, **bold**, and ### headers
+func parseLatex(text string) string {
+	if !hasLatex(text) && !strings.Contains(text, "###") && !strings.Contains(text, "**") {
+		return fmt.Sprintf("<p>%s</p>", text)
+	}
+
+	var parsed strings.Builder
+	lines := strings.Split(text, "\n")
+
+	// Loop through lines and detect LaTeX, headers, and bold formatting
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+
+		// Handle headers marked with ###
+		if strings.HasPrefix(line, "###") {
+			heading := strings.TrimPrefix(line, "###")
+			parsed.WriteString(fmt.Sprintf("<h3>%s</h3>", strings.TrimSpace(heading)))
+
+			// Process block LaTeX equations wrapped in \[ \]
+		} else if strings.HasPrefix(line, `\[`) && strings.HasSuffix(line, `\]`) {
+			parsed.WriteString(fmt.Sprintf("<div class='mathjax-block'>\\[%s\\]</div>", line[2:len(line)-2]))
+
+			// Process inline LaTeX equations wrapped in \(\)
+		} else if strings.Contains(line, `\(`) && strings.Contains(line, `\)`) {
+			parsed.WriteString(parseInlineLaTeX(line))
+
+			// Handle bold text wrapped in **
+		} else if strings.Contains(line, "**") {
+			parsed.WriteString(parseBoldText(line))
+
+			// Handle lines with mixed content including $...$ for LaTeX
+		} else if strings.Contains(line, "$") {
+			parsed.WriteString(parseInlineDollarLaTeX(line))
+
+			// Regular text without LaTeX or special formatting
+		} else {
+			parsed.WriteString(fmt.Sprintf("<p>%s</p>", line))
+		}
+	}
+
+	return parsed.String()
+}
+
+// parseBoldText function to handle **bold** text
+func parseBoldText(line string) string {
+	var parsed strings.Builder
+	parts := strings.Split(line, "**")
+	inBold := false
+	for _, part := range parts {
+		if inBold {
+			parsed.WriteString(fmt.Sprintf("<strong>%s</strong>", part))
+		} else {
+			parsed.WriteString(fmt.Sprintf("<span>%s</span>", part))
+		}
+		inBold = !inBold
+	}
+	return parsed.String()
+}
+
+// parseInlineLaTeX handles inline LaTeX equations
+func parseInlineLaTeX(line string) string {
+	var parsed strings.Builder
+	parts := strings.Split(line, `\(`)
+	for i, part := range parts {
+		if i > 0 {
+			subParts := strings.Split(part, `\)`)
+			if len(subParts) > 1 {
+				parsed.WriteString(fmt.Sprintf("<span class='mathjax'>\\(%s\\)</span>", subParts[0]))
+				parsed.WriteString(fmt.Sprintf("<span>%s</span>", subParts[1]))
+			} else {
+				parsed.WriteString(fmt.Sprintf("<span>%s</span>", part))
+			}
+		} else {
+			parsed.WriteString(fmt.Sprintf("<span>%s</span>", part))
+		}
+	}
+	parsed.WriteString("<br/>")
+	return parsed.String()
+}
+
+// parseInlineDollarLaTeX handles inline LaTeX with $...$ syntax
+func parseInlineDollarLaTeX(line string) string {
+	var parsed strings.Builder
+	parts := strings.Split(line, "$")
+	inLatex := false
+	for _, part := range parts {
+		if inLatex {
+			parsed.WriteString(fmt.Sprintf("<span class='mathjax'>\\(%s\\)</span>", part))
+		} else {
+			parsed.WriteString(fmt.Sprintf("<span>%s</span>", part))
+		}
+		inLatex = !inLatex
+	}
+	parsed.WriteString("<br/>")
+	return parsed.String()
+}
+
+// getFirstThreeWords extracts the first three words from the input text
+func getFirstThreeWords(text string) string {
+	words := strings.Fields(text)
+	if len(words) >= 3 {
+		return strings.Join(words[:3], " ")
+	} else if len(words) > 0 {
+		return strings.Join(words, " ")
+	} else {
+		return "LaTeX Renderer"
+	}
+}
+
+// renderLaTeXInBrowser renders LaTeX and formatted text in a browser
+func renderLaTeXInBrowser(text string) {
+	// Parse the LaTeX content and other formatting
+	parsedText := parseLatex(text)
+
+	// Extract the first three words for the title
+	title := getFirstThreeWords(text)
+
+	htmlTemplate := `
+	<!DOCTYPE html>
+	<html lang="en">
+	<head>
+		<meta charset="UTF-8">
+		<title>{{.Title}}</title>
+		<script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+		<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+		<style>
+			body {
+				font-family: Arial, sans-serif;
+				line-height: 1.6;
+				margin: 40px;
+				background-color: #f7f7f7;
+				color: #333;
+			}
+			.container {
+				max-width: 800px;
+				margin: 0 auto;
+				padding: 20px;
+				background-color: white;
+				box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+				border-radius: 10px;
+			}
+			.mathjax-block {
+				display: block;
+				margin: 20px 0;
+				padding: 10px;
+				background-color: #e9ecef;
+				border-left: 4px solid #007bff;
+				font-size: 1.2em;
+				text-align: center;
+				border-radius: 8px;
+			}
+			.mathjax {
+				font-size: 1.1em;
+				color: #333;
+			}
+			p {
+				margin: 12px 0;
+			}
+			h1, h2, h3 {
+				color: #1a1a1a;
+				margin-bottom: 15px;
+			}
+			strong {
+				font-weight: bold;
+				color: #000;
+			}
+		</style>
+		<script>
+		window.MathJax = {
+			tex: {
+				inlineMath: [['\\(', '\\)']],
+				displayMath: [['\\[', '\\]']]
+			},
+			svg: {
+				fontCache: 'global'
+			}
+		};
+		</script>
+	</head>
+	<body>
+		<div class="container">
+			<h1>{{.Title}}</h1>
+			{{.Text}}
+		</div>
+	</body>
+	</html>`
+
+	tmpl, err := template.New("latex").Parse(htmlTemplate)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error parsing template:", err)
+		return
+	}
+
+	// Prepare the data for the template
+	data := map[string]string{
+		"Title": title,
+		"Text":  parsedText,
+	}
+
+	var renderedHTML bytes.Buffer
+	err = tmpl.Execute(&renderedHTML, data)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error executing template:", err)
+		return
+	}
+
+	tmpFile, err := os.CreateTemp("", "latex-*.html")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error creating temp file:", err)
+		return
+	}
+	defer tmpFile.Close()
+
+	_, err = tmpFile.Write(renderedHTML.Bytes())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error writing to temp file:", err)
+		return
+	}
+
+	// Open the temp file in the default web browser
+	err = exec.Command("open", tmpFile.Name()).Start()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error opening browser:", err)
+		return
+	}
 }
